@@ -75,11 +75,12 @@ export function registerTransactionTools(
     execute: async (args: z.infer<typeof idSchema> & z.infer<typeof updateTransactionSchema>) => {
       try {
         const { id, ...updateData } = args;
-        const transaction = await client.put<{ transaction: Transaction }>(
+        // Lunch Money v1 expects the changes wrapped in a `transaction` object.
+        const result = await client.put<{ updated: boolean }>(
           `/transactions/${id}`,
-          updateData
+          { transaction: updateData }
         );
-        return JSON.stringify(transaction, null, 2);
+        return JSON.stringify(result, null, 2);
       } catch (error) {
         return formatErrorForMCP(error);
       }
@@ -107,11 +108,20 @@ export function registerTransactionTools(
     parameters: bulkUpdateTransactionsSchema,
     execute: async (args: z.infer<typeof bulkUpdateTransactionsSchema>) => {
       try {
-        const result = await client.post<{ updated: number }>(
-          "/transactions/bulk",
-          args
-        );
-        return JSON.stringify(result, null, 2);
+        // Lunch Money v1 has no bulk endpoint: apply the same change to each
+        // transaction with PUT /transactions/:id and report per-id failures.
+        const { transaction_ids, ...changes } = args;
+        const failed: { id: number; error: string }[] = [];
+        let updated = 0;
+        for (const id of transaction_ids) {
+          try {
+            await client.put(`/transactions/${id}`, { transaction: changes });
+            updated++;
+          } catch (err) {
+            failed.push({ id, error: err instanceof Error ? err.message : String(err) });
+          }
+        }
+        return JSON.stringify({ updated, failed }, null, 2);
       } catch (error) {
         return formatErrorForMCP(error);
       }

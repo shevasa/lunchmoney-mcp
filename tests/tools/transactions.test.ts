@@ -174,16 +174,15 @@ describe("Transaction tools", () => {
 
   // ---------- updateTransaction ----------
   describe("updateTransaction", () => {
-    it("returns JSON stringified updated transaction on success", async () => {
-      const updatedTransaction = { ...sampleTransaction, payee: "Updated" };
-      const mockResponse = { transaction: updatedTransaction };
+    it("wraps changes in a transaction object (Lunch Money v1)", async () => {
+      const mockResponse = { updated: true };
       mockClient.put.mockResolvedValue(mockResponse);
 
       const tool = tools.find((t) => t.name === "updateTransaction")!;
       const result = await tool.execute({ id: 1, payee: "Updated" });
 
       expect(mockClient.put).toHaveBeenCalledWith("/transactions/1", {
-        payee: "Updated",
+        transaction: { payee: "Updated" },
       });
       expect(result).toBe(JSON.stringify(mockResponse, null, 2));
     });
@@ -230,35 +229,36 @@ describe("Transaction tools", () => {
 
   // ---------- bulkUpdateTransactions ----------
   describe("bulkUpdateTransactions", () => {
-    it("returns JSON stringified update count on success", async () => {
-      const mockResponse = { updated: 3 };
-      mockClient.post.mockResolvedValue(mockResponse);
-
-      const tool = tools.find((t) => t.name === "bulkUpdateTransactions")!;
-      const args = {
-        transaction_ids: [1, 2, 3],
-        status: "cleared",
-      };
-      const result = await tool.execute(args);
-
-      expect(mockClient.post).toHaveBeenCalledWith("/transactions/bulk", args);
-      expect(result).toBe(JSON.stringify(mockResponse, null, 2));
-    });
-
-    it("returns formatted error on LunchMoneyAPIError", async () => {
-      mockClient.post.mockRejectedValue(
-        new LunchMoneyAPIError("Server error", 500)
-      );
+    it("updates each transaction via PUT and reports the count", async () => {
+      mockClient.put.mockResolvedValue({ updated: true });
 
       const tool = tools.find((t) => t.name === "bulkUpdateTransactions")!;
       const result = await tool.execute({
         transaction_ids: [1, 2, 3],
-        status: "cleared",
+        category_id: 42,
       });
 
-      expect(result).toBe(
-        "Lunch Money API Error: Server error (Status: 500)"
+      expect(mockClient.put).toHaveBeenCalledTimes(3);
+      expect(mockClient.put).toHaveBeenCalledWith("/transactions/2", {
+        transaction: { category_id: 42 },
+      });
+      expect(mockClient.post).not.toHaveBeenCalled();
+      expect(result).toBe(JSON.stringify({ updated: 3, failed: [] }, null, 2));
+    });
+
+    it("keeps going and lists failures when some updates fail", async () => {
+      mockClient.put
+        .mockResolvedValueOnce({ updated: true })
+        .mockRejectedValueOnce(new LunchMoneyAPIError("Not found", 404))
+        .mockResolvedValueOnce({ updated: true });
+
+      const tool = tools.find((t) => t.name === "bulkUpdateTransactions")!;
+      const result = JSON.parse(
+        await tool.execute({ transaction_ids: [1, 2, 3], status: "cleared" })
       );
+
+      expect(result.updated).toBe(2);
+      expect(result.failed).toEqual([{ id: 2, error: "Not found" }]);
     });
   });
 
